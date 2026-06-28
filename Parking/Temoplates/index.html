@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parking Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 24px; background: #1a1d27; border-bottom: 1px solid #2d3148;
+  }
+  header h1 { font-size: 18px; font-weight: 600; letter-spacing: .02em; }
+  .badge { padding: 4px 12px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+  .badge-green  { background: #14532d44; color: #4ade80; border: 1px solid #16a34a55; }
+  .badge-red    { background: #7f1d1d44; color: #f87171; border: 1px solid #dc262655; }
+
+  .stats { display: flex; gap: 16px; padding: 20px 24px; }
+  .stat-card {
+    flex: 1; background: #1a1d27; border: 1px solid #2d3148;
+    border-radius: 12px; padding: 16px 20px;
+  }
+  .stat-card .label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #64748b; }
+  .stat-card .value { font-size: 32px; font-weight: 700; margin-top: 4px; }
+  .value-free  { color: #4ade80; }
+  .value-occ   { color: #f87171; }
+  .value-total { color: #94a3b8; }
+
+  .main { display: flex; gap: 16px; padding: 0 24px 24px; }
+  .canvas-wrap {
+    flex: 1; background: #1a1d27; border: 1px solid #2d3148;
+    border-radius: 12px; padding: 16px; position: relative; overflow: hidden;
+  }
+  canvas { display: block; width: 100%; border-radius: 8px; }
+
+  .side { width: 240px; display: flex; flex-direction: column; gap: 16px; }
+  .panel {
+    background: #1a1d27; border: 1px solid #2d3148;
+    border-radius: 12px; padding: 16px;
+  }
+  .panel h3 { font-size: 13px; font-weight: 600; color: #94a3b8; margin-bottom: 12px; text-transform: uppercase; letter-spacing: .06em; }
+
+  .qr-img { width: 100%; border-radius: 8px; border: 1px solid #2d3148; }
+
+  .route-info p { font-size: 13px; color: #94a3b8; margin-bottom: 6px; }
+  .route-info strong { color: #e2e8f0; }
+
+  .refresh-note { font-size: 11px; color: #475569; padding: 0 24px 12px; }
+
+  a.btn {
+    display: block; text-align: center; text-decoration: none;
+    background: #3b5bdb; color: #fff; border-radius: 8px;
+    padding: 9px; font-size: 13px; font-weight: 600; margin-top: 8px;
+  }
+  a.btn:hover { background: #4c6ef5; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🅿 Smart Parking · Operator Dashboard</h1>
+  <span class="badge badge-green" id="live-badge">● LIVE</span>
+</header>
+
+<div class="stats">
+  <div class="stat-card">
+    <div class="label">Free spots</div>
+    <div class="value value-free" id="stat-free">–</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Occupied</div>
+    <div class="value value-occ" id="stat-occ">–</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Total</div>
+    <div class="value value-total" id="stat-total">–</div>
+  </div>
+</div>
+
+<div class="main">
+  <div class="canvas-wrap">
+    <canvas id="lot-canvas" width="800" height="500"></canvas>
+  </div>
+  <div class="side">
+    <div class="panel">
+      <h3>Customer QR</h3>
+      <img class="qr-img" src="/qr" alt="QR code">
+      <a class="btn" href="/qr/download">Download QR</a>
+      <a class="btn" href="/guide" target="_blank" style="background:#1a1d27;border:1px solid #2d3148;color:#94a3b8;margin-top:6px;">Preview guide →</a>
+    </div>
+    <div class="panel route-info" id="route-panel">
+      <h3>Best route</h3>
+      <p>Spot: <strong id="r-spot">–</strong></p>
+      <p>Distance: <strong id="r-dist">–</strong> px</p>
+      <p>Waypoints: <strong id="r-wpts">–</strong></p>
+    </div>
+    <div class="panel">
+      <h3>Dev tools</h3>
+      <a class="btn" href="/dev/seed" style="background:#312e81;font-size:12px;">Seed fake data</a>
+    </div>
+  </div>
+</div>
+<p class="refresh-note">Auto-refreshes every 2 s</p>
+
+<script>
+const canvas = document.getElementById('lot-canvas');
+const ctx = canvas.getContext('2d');
+
+const COLORS = {
+  free:     '#22c55e',
+  occupied: '#ef4444',
+  unknown:  '#475569',
+  edge:     'rgba(100,116,139,0.25)',
+  route:    '#facc15',
+  path:     '#38bdf8',
+};
+
+let state = null;
+
+function draw(s) {
+  const spots = s.lot.spots;
+  if (!spots.length) return;
+
+  // compute bounding box of all spots
+  const xs = spots.flatMap(sp => sp.points.map(p => p[0]));
+  const ys = spots.flatMap(sp => sp.points.map(p => p[1]));
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const pad = 40;
+  const scaleX = (canvas.width  - pad*2) / (maxX - minX || 1);
+  const scaleY = (canvas.height - pad*2) / (maxY - minY || 1);
+  const scale  = Math.min(scaleX, scaleY);
+  const tx = p => (p[0] - minX) * scale + pad;
+  const ty = p => (p[1] - minY) * scale + pad;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // draw edges
+  ctx.strokeStyle = COLORS.edge;
+  ctx.lineWidth = 1;
+  const spotMap = Object.fromEntries(spots.map(sp => [sp.id, sp]));
+  for (const edge of s.lot.edges) {
+    const a = spotMap[edge.from], b = spotMap[edge.to];
+    if (!a || !b) continue;
+    ctx.beginPath();
+    ctx.moveTo(tx([a.cx]), ty([a.cy]));
+    ctx.lineTo(tx([b.cx]), ty([b.cy]));
+    ctx.stroke();
+  }
+
+  // draw route path
+  if (s.route) {
+    const wpts = s.route.waypoints;
+    if (wpts.length > 1) {
+      ctx.strokeStyle = COLORS.path;
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(tx([wpts[0].x]), ty([wpts[0].y]));
+      for (let i = 1; i < wpts.length; i++) {
+        ctx.lineTo(tx([wpts[i].x]), ty([wpts[i].y]));
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  // draw spots
+  for (const sp of spots) {
+    const pts = sp.points.map(p => [tx(p), ty(p)]);
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+
+    const isTarget = s.route && sp.id === s.route.spot_id;
+    ctx.fillStyle = isTarget
+      ? COLORS.route + '55'
+      : sp.status === 'free'     ? COLORS.free     + '30'
+      : sp.status === 'occupied' ? COLORS.occupied  + '30'
+      :                            COLORS.unknown   + '20';
+    ctx.fill();
+
+    ctx.strokeStyle = isTarget ? COLORS.route
+      : sp.status === 'free'     ? COLORS.free
+      : sp.status === 'occupied' ? COLORS.occupied
+      :                            COLORS.unknown;
+    ctx.lineWidth = isTarget ? 2.5 : 1.5;
+    ctx.stroke();
+
+    // spot id label
+    const cx = pts.reduce((s,p) => s+p[0], 0)/4;
+    const cy = pts.reduce((s,p) => s+p[1], 0)/4;
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '10px system-ui';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(sp.id, cx, cy);
+  }
+}
+
+async function refresh() {
+  try {
+    const res = await fetch('/api/state');
+    state = await res.json();
+
+    document.getElementById('stat-free').textContent  = state.free_count;
+    document.getElementById('stat-occ').textContent   = state.occupied_count;
+    document.getElementById('stat-total').textContent = state.total;
+
+    if (state.route) {
+      document.getElementById('r-spot').textContent = '#' + state.route.spot_id;
+      document.getElementById('r-dist').textContent = state.route.distance;
+      document.getElementById('r-wpts').textContent = state.route.waypoints.length;
+    } else {
+      document.getElementById('r-spot').textContent = 'None available';
+      document.getElementById('r-dist').textContent = '–';
+      document.getElementById('r-wpts').textContent = '–';
+    }
+
+    draw(state);
+  } catch(e) {
+    document.getElementById('live-badge').textContent = '✕ OFFLINE';
+    document.getElementById('live-badge').className = 'badge badge-red';
+  }
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

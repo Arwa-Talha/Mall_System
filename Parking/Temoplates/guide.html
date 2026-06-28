@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Find Your Parking Spot</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0f1117;color:#e2e8f0;min-height:100vh;display:flex;flex-direction:column}
+header{padding:16px 20px;background:#1a1d27;border-bottom:1px solid #2d3148;text-align:center}
+header h1{font-size:20px;font-weight:700}
+header p{font-size:12px;color:#64748b;margin-top:3px}
+.hero{padding:16px;display:flex;flex-direction:column;align-items:center;gap:12px}
+.spot-badge{background:linear-gradient(135deg,#1e3a5f,#1e4d2b);border:2px solid #22c55e;border-radius:16px;padding:18px 28px;text-align:center;width:100%;max-width:340px}
+.badge-label{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.08em}
+.badge-num{font-size:60px;font-weight:800;color:#4ade80;line-height:1}
+.badge-sub{font-size:12px;color:#86efac;margin-top:4px}
+.no-spot{background:#1a1d27;border:2px solid #dc2626;border-radius:16px;padding:24px;text-align:center;width:100%;max-width:340px}
+.no-spot p{color:#f87171;font-size:16px;font-weight:600}
+.no-spot small{color:#64748b;font-size:12px;display:block;margin-top:6px}
+.dist-tag{display:inline-flex;align-items:center;background:#1e293b;border:1px solid #334155;border-radius:99px;padding:4px 14px;font-size:12px;color:#94a3b8}
+.map-wrap{width:100%;max-width:480px;background:#1a1d27;border:1px solid #2d3148;border-radius:12px;overflow:hidden}
+canvas{display:block;width:100%}
+.steps{width:100%;max-width:340px;background:#1a1d27;border:1px solid #2d3148;border-radius:12px;padding:14px}
+.steps h3{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+.step{display:flex;align-items:flex-start;gap:10px;margin-bottom:8px}
+.step-n{width:22px;height:22px;border-radius:50%;background:#3b5bdb;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.step p{font-size:13px;color:#cbd5e1;line-height:1.5}
+.btn-row{display:flex;gap:8px;width:100%;max-width:340px}
+.btn{flex:1;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;transition:opacity .15s}
+.btn:active{opacity:.7}
+.btn-new{background:#1e3a8a;color:#93c5fd}
+.btn-ref{background:#1a1d27;border:1px solid #334155;color:#64748b}
+.live-bar{font-size:11px;color:#475569;text-align:center;padding:6px;background:#1a1d27;border-top:1px solid #1e293b}
+footer{padding:10px;text-align:center;font-size:10px;color:#334155;margin-top:auto}
+</style>
+</head>
+<body>
+<header>
+  <h1>🅿 Your Parking Spot</h1>
+  <p id="hdr-sub">Loading…</p>
+</header>
+
+<div class="hero" id="hero">
+  <p style="color:#475569;font-size:13px">Finding your spot…</p>
+</div>
+
+<div class="live-bar" id="live-bar">connecting…</div>
+<footer>Session: {{ session_id }}</footer>
+
+<script>
+const SESSION    = "{{ session_id }}";
+const PUBLIC_URL = "{{ public_url }}";
+
+// ── server-rendered on first load (instant paint) ──
+let myRoute = {{ route_json | safe }};
+let lotData  = {{ lot_json  | safe }};
+
+// ── draw the canvas map ──
+function drawMap(canvas, lot, route) {
+  const ctx = canvas.getContext('2d');
+  const spots = lot.spots || [];
+  if (!spots.length) return;
+
+  const xs = spots.flatMap(s => (s.points||[]).map(p=>p[0]));
+  const ys = spots.flatMap(s => (s.points||[]).map(p=>p[1]));
+  if (!xs.length) return;
+  const minX=Math.min(...xs), maxX=Math.max(...xs);
+  const minY=Math.min(...ys), maxY=Math.max(...ys);
+  const pad=28;
+  const scale=Math.min((canvas.width-pad*2)/(maxX-minX||1),(canvas.height-pad*2)/(maxY-minY||1));
+  const tx=v=>(v-minX)*scale+pad;
+  const ty=v=>(v-minY)*scale+pad;
+
+  ctx.fillStyle='#0d1117';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // route path
+  if (route && route.waypoints && route.waypoints.length>1) {
+    ctx.strokeStyle='#38bdf8';ctx.lineWidth=2.5;ctx.setLineDash([6,4]);
+    ctx.beginPath();
+    ctx.moveTo(tx(route.waypoints[0].x),ty(route.waypoints[0].y));
+    for(let i=1;i<route.waypoints.length;i++)
+      ctx.lineTo(tx(route.waypoints[i].x),ty(route.waypoints[i].y));
+    ctx.stroke();ctx.setLineDash([]);
+  }
+
+  // spots
+  for(const sp of spots){
+    if(!sp.points||sp.points.length<3) continue;
+    const pts=sp.points.map(p=>[tx(p[0]),ty(p[1])]);
+    ctx.beginPath();ctx.moveTo(pts[0][0],pts[0][1]);
+    for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0],pts[i][1]);
+    ctx.closePath();
+    const isMe = route && sp.id===route.spot_id;
+    ctx.fillStyle = isMe?'#facc1545':sp.status==='free'?'#22c55e28':sp.status==='occupied'?'#ef444428':'#47556920';
+    ctx.fill();
+    ctx.strokeStyle = isMe?'#facc15':sp.status==='free'?'#22c55e':sp.status==='occupied'?'#ef4444':'#475569';
+    ctx.lineWidth = isMe?2.5:1;
+    ctx.stroke();
+    if(isMe){
+      const cx=pts.reduce((s,p)=>s+p[0],0)/pts.length;
+      const cy=pts.reduce((s,p)=>s+p[1],0)/pts.length;
+      ctx.fillStyle='#facc15';ctx.font='bold 12px system-ui';
+      ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText('★',cx,cy);
+    }
+  }
+
+  // legend
+  [['#22c55e','Free'],['#ef4444','Occ.'],['#facc15','Yours'],['#38bdf8','Route']].forEach(([c,l],i)=>{
+    ctx.fillStyle=c;ctx.fillRect(pad+i*72,canvas.height-16,10,10);
+    ctx.fillStyle='#64748b';ctx.font='9px system-ui';ctx.textAlign='left';
+    ctx.fillText(l,pad+i*72+13,canvas.height-7);
+  });
+}
+
+// ── build full UI ──
+function buildUI(route, lot) {
+  const hero=document.getElementById('hero');
+  hero.innerHTML='';
+  document.getElementById('hdr-sub').textContent = route
+    ? `Spot #${route.spot_id} reserved for you`
+    : 'No spots available right now';
+
+  if(!route){
+    hero.innerHTML=`<div class="no-spot"><p>No free spots</p><small>Page refreshes automatically</small></div>`;
+    return;
+  }
+
+  // badge
+  const badge=document.createElement('div');badge.className='spot-badge';
+  badge.innerHTML=`<div class="badge-label">Your spot</div>
+    <div class="badge-num">#${route.spot_id}</div>
+    <div class="badge-sub">Reserved for you · ~${Math.round(route.distance/10)}m away</div>`;
+  hero.appendChild(badge);
+
+  // map
+  if(lot&&lot.spots&&lot.spots.length){
+    const wrap=document.createElement('div');wrap.className='map-wrap';
+    const cv=document.createElement('canvas');cv.width=480;cv.height=300;
+    wrap.appendChild(cv);hero.appendChild(wrap);
+    drawMap(cv,lot,route);
+  }
+
+  // steps
+  const steps=document.createElement('div');steps.className='steps';
+  steps.innerHTML=`<h3>Directions</h3>
+    <div class="step"><div class="step-n">1</div><p>Enter through the main entrance</p></div>
+    <div class="step"><div class="step-n">2</div><p>Follow the <span style="color:#38bdf8;font-weight:600">blue dashed path</span></p></div>
+    <div class="step"><div class="step-n">3</div><p>Park at <span style="color:#facc15;font-weight:600">★ Spot #${route.spot_id}</span></p></div>`;
+  hero.appendChild(steps);
+
+  // buttons
+  const row=document.createElement('div');row.className='btn-row';
+
+  const btnNew=document.createElement('button');
+  btnNew.className='btn btn-new';btnNew.textContent='↺ Different spot';
+  btnNew.onclick=()=>{
+    btnNew.textContent='Finding…';btnNew.disabled=true;
+    window.location.href=`/guide?session=${SESSION}&new=1`;
+  };
+
+  const btnRef=document.createElement('button');
+  btnRef.className='btn btn-ref';btnRef.textContent='↻ Refresh map';
+  btnRef.onclick=refreshLot;
+
+  row.appendChild(btnNew);row.appendChild(btnRef);
+  hero.appendChild(row);
+}
+
+// ── refresh only the lot map (keep same spot) ──
+async function refreshLot(){
+  try{
+    const res=await fetch('/api/state');
+    const state=await res.json();
+    lotData=state.lot;
+    buildUI(myRoute, lotData);
+    document.getElementById('live-bar').textContent=
+      `${state.free_count} free · ${state.occupied_count} occupied · updated just now`;
+  }catch(e){
+    document.getElementById('live-bar').textContent='⚠ Cannot reach server';
+  }
+}
+
+// ── first paint ──
+buildUI(myRoute, lotData);
+document.getElementById('live-bar').textContent=
+  lotData?`${lotData.free_count} free · ${lotData.occupied_count} occupied · live`:'';
+
+// ── auto-refresh lot every 5 s ──
+setInterval(refreshLot, 5000);
+</script>
+</body>
+</html>
