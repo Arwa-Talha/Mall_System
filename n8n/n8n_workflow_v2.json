@@ -1,0 +1,407 @@
+{
+  "name": "Smart Mall Surveillance v2",
+  "nodes": [
+
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "4d61f1c4-8831-45cf-be46-5429373f338d",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-400, 0],
+      "id": "webhook-main",
+      "name": "Webhook",
+      "webhookId": "4d61f1c4-8831-45cf-be46-5429373f338d"
+    },
+
+    {
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "operator": { "type": "string", "operation": "equals" },
+                    "leftValue": "={{ $json.body.event_type }}",
+                    "rightValue": "heartbeat"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "crowd"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "operator": { "type": "string", "operation": "equals" },
+                    "leftValue": "={{ $json.body.event_type }}",
+                    "rightValue": "state_change"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "parking"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "operator": { "type": "string", "operation": "equals" },
+                    "leftValue": "={{ $json.body.event_type }}",
+                    "rightValue": "violence_alert"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "violence"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [-160, 0],
+      "id": "switch-event-type",
+      "name": "Route by event_type"
+    },
+
+    {
+      "parameters": {
+        "chatId": "={{ $json.body.dispatch.nearest_guard_chat }}",
+        "text": "=🚨 *SECURITY ALERT — Violence Detected*\n\n📍 Mall: {{ $json.body.source.mall_id }}\n📷 Camera: {{ $json.body.source.camera_id }}\n\n🔴 Confidence: {{ ($json.body.detection.confidence * 100).toFixed(1) }}%\n⚠️ Severity: {{ $json.body.severity }}\n📊 Sustained Windows: {{ $json.body.detection.consecutive_windows }}\n\n👮 Assigned to: {{ $json.body.dispatch.nearest_guard_name }}\n🕒 {{ $json.body.timestamp }}\n\n🆔 Incident: `{{ $json.body.incident_id }}`\n\n*Tap ACCEPT to acknowledge this alert.*",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "={{ JSON.stringify({ inline_keyboard: [[ { text: '✅ ACCEPT', callback_data: 'ack:' + $json.body.incident_id + ':' + $json.body.dispatch.nearest_guard_id }, { text: '🔄 REASSIGN', callback_data: 'esc:' + $json.body.incident_id } ]] }) }}"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [80, 200],
+      "id": "telegram-violence-initial",
+      "name": "Violence Alert — Initial",
+      "credentials": {
+        "telegramApi": {
+          "id": "mPA3YoRTS25g98lE",
+          "name": "Telegram account"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [320, 200],
+      "id": "wait-ack-timeout",
+      "name": "Wait for ACK (30s)"
+    },
+
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://127.0.0.1:8000/api/v1/incidents/{{ $('Route by event_type').item.json.body.incident_id }}",
+        "options": { "timeout": 5000 }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [560, 200],
+      "id": "http-check-ack-status",
+      "name": "Check ACK Status"
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            {
+              "operator": { "type": "string", "operation": "equals" },
+              "leftValue": "={{ $json.ack_status }}",
+              "rightValue": "acknowledged"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [800, 200],
+      "id": "if-acknowledged",
+      "name": "Acknowledged?"
+    },
+
+    {
+      "parameters": {
+        "chatId": "1708697158",
+        "text": "=✅ *Incident Resolved*\n\nIncident `{{ $('Route by event_type').item.json.body.incident_id }}` has been acknowledged.\nNo further escalation needed.",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1040, 80],
+      "id": "telegram-resolved",
+      "name": "Notify Resolved",
+      "credentials": {
+        "telegramApi": {
+          "id": "mPA3YoRTS25g98lE",
+          "name": "Telegram account"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://127.0.0.1:8000/api/v1/guards/next?incident_id={{ $('Route by event_type').item.json.body.incident_id }}&escalation_level={{ $json.escalation_level + 1 }}",
+        "options": { "timeout": 5000 }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 340],
+      "id": "http-get-next-guard",
+      "name": "Get Next Guard"
+    },
+
+    {
+      "parameters": {
+        "chatId": "={{ $json.guard_chat_id }}",
+        "text": "=🚨 *ESCALATED ALERT — Violence Detected*\n\n⬆️ Escalation Level: {{ $json.escalation_level }}\n📍 Mall: {{ $('Route by event_type').item.json.body.source.mall_id }}\n📷 Camera: {{ $('Route by event_type').item.json.body.source.camera_id }}\n\n🔴 Confidence: {{ ($('Route by event_type').item.json.body.detection.confidence * 100).toFixed(1) }}%\n⚠️ Severity: {{ $('Route by event_type').item.json.body.severity }}\n\n👮 Assigned to: {{ $json.guard_name }}\n🕒 Now: {{ new Date().toISOString() }}\n\n🆔 Incident: `{{ $('Route by event_type').item.json.body.incident_id }}`\n\n*Previous guard did not respond. Please acknowledge immediately.*",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "={{ JSON.stringify({ inline_keyboard: [[ { text: '✅ ACCEPT', callback_data: 'ack:' + $('Route by event_type').item.json.body.incident_id + ':' + $json.guard_id } ]] }) }}"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1280, 340],
+      "id": "telegram-escalated",
+      "name": "Escalated Alert",
+      "credentials": {
+        "telegramApi": {
+          "id": "mPA3YoRTS25g98lE",
+          "name": "Telegram account"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1520, 340],
+      "id": "wait-escalation-timeout",
+      "name": "Wait Again (30s)"
+    },
+
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://127.0.0.1:8000/api/v1/incidents/{{ $('Route by event_type').item.json.body.incident_id }}",
+        "options": { "timeout": 5000 }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 340],
+      "id": "http-check-ack-escalated",
+      "name": "Check ACK (Escalated)"
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            {
+              "operator": { "type": "string", "operation": "equals" },
+              "leftValue": "={{ $json.ack_status }}",
+              "rightValue": "acknowledged"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2000, 340],
+      "id": "if-acknowledged-escalated",
+      "name": "Acknowledged? (Escalated)"
+    },
+
+    {
+      "parameters": {
+        "chatId": "1708697158",
+        "text": "=✅ *Incident Resolved (after escalation)*\n\nIncident `{{ $('Route by event_type').item.json.body.incident_id }}` acknowledged at escalation level {{ $json.escalation_level }}.",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2240, 200],
+      "id": "telegram-resolved-escalated",
+      "name": "Notify Resolved (Escalated)",
+      "credentials": {
+        "telegramApi": {
+          "id": "mPA3YoRTS25g98lE",
+          "name": "Telegram account"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "chatId": "1708697158",
+        "text": "=🆘 *UNACKNOWLEDGED INCIDENT — Manual Intervention Required*\n\nAll {{ $('Route by event_type').item.json.body.dispatch.max_escalation_level }} escalation levels exhausted.\n\n🆔 Incident: `{{ $('Route by event_type').item.json.body.incident_id }}`\n📍 {{ $('Route by event_type').item.json.body.source.mall_id }} | {{ $('Route by event_type').item.json.body.source.camera_id }}\n\nPlease respond immediately.",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2240, 480],
+      "id": "telegram-max-escalation",
+      "name": "Max Escalation Reached",
+      "credentials": {
+        "telegramApi": {
+          "id": "mPA3YoRTS25g98lE",
+          "name": "Telegram account"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "chatId": "1708697158",
+        "text": "=🏢 *Smart Mall — Crowd Monitor*\n\n▪️ Source: {{ $json.body.source }}\n▪️ Event: {{ $json.body.event_type }}\n▪️ Mall: {{ $json.body.mall_id }}\n▪️ Camera: {{ $json.body.camera_id }}\n▪️ Crowd Level: {{ $json.body.data.level }}\n▪️ People Count: {{ $json.body.data.count }}\n\n⚙️ Auto-Adjusted Systems:\nLighting: {{ $json.body.data.lighting }}\nHVAC: {{ $json.body.data.hvac }}\n\n⚠️ Severity: {{ $json.body.severity }}\n🕒 {{ $json.body.timestamp }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [80, -160],
+      "id": "telegram-crowd",
+      "name": "Crowd Alert",
+      "credentials": {
+        "telegramApi": {
+          "id": "mPA3YoRTS25g98lE",
+          "name": "Telegram account"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "chatId": "1708697158",
+        "text": "=🅿️ *Smart Mall — Parking Monitor*\n\n▪️ Source: {{ $json.body.source }}\n▪️ Event: {{ $json.body.event_type }}\n▪️ Mall: {{ $json.body.mall_id }}\n▪️ Camera: {{ $json.body.camera_id }}\n▪️ Occupied: {{ $json.body.data.occupied_count }} / {{ $json.body.data.total_spots }}\n▪️ Free Spots: {{ $json.body.data.free_count }}\n\n⚠️ Severity: {{ $json.body.severity }}\n🕒 {{ $json.body.timestamp }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [80, 0],
+      "id": "telegram-parking",
+      "name": "Parking Alert",
+      "credentials": {
+        "telegramApi": {
+          "id": "mPA3YoRTS25g98lE",
+          "name": "Telegram account"
+        }
+      }
+    }
+
+  ],
+
+  "connections": {
+    "Webhook": {
+      "main": [[
+        { "node": "Route by event_type", "type": "main", "index": 0 }
+      ]]
+    },
+    "Route by event_type": {
+      "main": [
+        [{ "node": "Crowd Alert",              "type": "main", "index": 0 }],
+        [{ "node": "Parking Alert",            "type": "main", "index": 0 }],
+        [{ "node": "Violence Alert — Initial", "type": "main", "index": 0 }]
+      ]
+    },
+    "Violence Alert — Initial": {
+      "main": [[
+        { "node": "Wait for ACK (30s)", "type": "main", "index": 0 }
+      ]]
+    },
+    "Wait for ACK (30s)": {
+      "main": [[
+        { "node": "Check ACK Status", "type": "main", "index": 0 }
+      ]]
+    },
+    "Check ACK Status": {
+      "main": [[
+        { "node": "Acknowledged?", "type": "main", "index": 0 }
+      ]]
+    },
+    "Acknowledged?": {
+      "main": [
+        [{ "node": "Notify Resolved",  "type": "main", "index": 0 }],
+        [{ "node": "Get Next Guard",   "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Next Guard": {
+      "main": [[
+        { "node": "Escalated Alert", "type": "main", "index": 0 }
+      ]]
+    },
+    "Escalated Alert": {
+      "main": [[
+        { "node": "Wait Again (30s)", "type": "main", "index": 0 }
+      ]]
+    },
+    "Wait Again (30s)": {
+      "main": [[
+        { "node": "Check ACK (Escalated)", "type": "main", "index": 0 }
+      ]]
+    },
+    "Check ACK (Escalated)": {
+      "main": [[
+        { "node": "Acknowledged? (Escalated)", "type": "main", "index": 0 }
+      ]]
+    },
+    "Acknowledged? (Escalated)": {
+      "main": [
+        [{ "node": "Notify Resolved (Escalated)", "type": "main", "index": 0 }],
+        [{ "node": "Max Escalation Reached",      "type": "main", "index": 0 }]
+      ]
+    }
+  },
+
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "de344202fea41d3aa93f587030b8f67ecad00e5c56215ea2fa86623089b9866d",
+    "notes": [
+      "Switch node routes heartbeat→Crowd, state_change→Parking, violence_alert→Violence escalation chain.",
+      "executeOnce has been removed from all Telegram nodes.",
+      "Violence path: Initial alert → Wait 30s → Check ACK → if not acked → Get Next Guard → Escalated alert → Wait 30s → Check ACK → if still not acked → Max Escalation message.",
+      "To add more escalation loops, duplicate the Get Next Guard → Escalated Alert → Wait → Check ACK → IF chain and connect the NO branch of each IF to the next loop.",
+      "Guard chat_ids in the dispatch block come from /api/v1/guards/next on the gateway.",
+      "Telegram inline-keyboard ACCEPT button callback_data format: 'ack:{incident_id}:{guard_id}' — wire a Telegram Trigger node to catch this and POST to /api/v1/acknowledge."
+    ]
+  }
+}
